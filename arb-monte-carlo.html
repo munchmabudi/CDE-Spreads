@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Monte Carlo Spread Rolling Simulator</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; --red:#f85149; --yellow:#d29922; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'SF Mono','Consolas',monospace; background:var(--bg); color:var(--fg); padding:24px; font-size:13px; }
+  h1 { font-size:16px; margin-bottom:4px; }
+  h2 { font-size:13px; color:var(--accent); margin:20px 0 10px; border-bottom:1px solid var(--border); padding-bottom:4px; }
+  .subtitle { color:var(--muted); font-size:11px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; }
+  label { display:block; font-size:10px; color:var(--muted); text-transform:uppercase; margin-bottom:2px; }
+  input,select { background:var(--bg); border:1px solid var(--border); color:var(--fg); padding:5px 8px; border-radius:4px; width:100%; font-family:inherit; font-size:12px; }
+  input:focus,select:focus { outline:none; border-color:var(--accent); }
+  .row { margin-bottom:8px; }
+  .result { font-size:22px; font-weight:bold; }
+  .result-sm { font-size:16px; font-weight:bold; }
+  .result-label { font-size:10px; color:var(--muted); text-transform:uppercase; }
+  .green { color:var(--green); }
+  .red { color:var(--red); }
+  .yellow { color:var(--yellow); }
+  .accent { color:var(--accent); }
+  .note { font-size:10px; color:var(--muted); margin-top:3px; }
+  .full { grid-column:1/-1; }
+  .formula { background:var(--bg); padding:10px; border-radius:6px; font-size:11px; margin:8px 0; border-left:2px solid var(--accent); }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; color:var(--muted); font-size:9px; text-transform:uppercase; padding:4px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--card); }
+  td { padding:3px 4px; border-bottom:1px solid rgba(48,54,61,0.4); font-size:11px; }
+  .num { text-align:right; }
+  .scroll { max-height:500px; overflow-y:auto; }
+  .btn { background:var(--accent); color:var(--bg); border:none; padding:10px 20px; border-radius:4px; font-family:inherit; font-size:12px; font-weight:bold; cursor:pointer; }
+  .btn:hover { opacity:0.9; }
+  .btn:disabled { opacity:0.5; cursor:wait; }
+  .progress { width:100%; height:20px; background:var(--bg); border-radius:4px; overflow:hidden; margin:8px 0; }
+  .progress-bar { height:100%; background:var(--accent); transition:width 0.3s; }
+  .dist-bar { height:16px; border-radius:2px; margin:1px 0; display:flex; align-items:center; padding-left:4px; font-size:9px; color:var(--bg); font-weight:bold; }
+  .highlight { background:rgba(88,166,255,0.1); border:1px solid var(--accent); }
+  .win { background:var(--green); }
+  .loss { background:var(--red); }
+  @media(max-width:900px) { .grid,.grid2,.grid3 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+
+<h1>Monte Carlo Spread Rolling Simulator</h1>
+<p class="subtitle">Test thousands of randomized scenarios to see if spread rolling with incentives is profitable</p>
+
+<h2>Simulation Parameters</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Capital & Leverage</h3>
+    <div class="row"><label>Capital ($)</label><input type="number" id="capital" value="100000" min="1"></div>
+    <div class="row"><label>Leverage (×)</label><input type="number" id="leverage" value="5" min="1" step="0.5"></div>
+    <div class="row"><label>Notional ($)</label><input type="text" id="notionalDisp" readonly tabindex="-1"></div>
+  </div>
+  <div class="card">
+    <h3>Token Universe</h3>
+    <div class="row"><label>Number of Tokens</label><input type="number" id="numTokens" value="13" min="1"></div>
+    <div class="row"><label>Spreads per Token</label><input type="number" id="numSpreads" value="3" min="1"></div>
+    <div class="row"><label>Total Spreads</label><input type="text" id="totalSpreads" readonly tabindex="-1"></div>
+  </div>
+  <div class="card">
+    <h3>APY Distribution</h3>
+    <div class="row"><label>Min APY (%)</label><input type="number" id="apyMin" value="5" step="0.5"></div>
+    <div class="row"><label>Max APY (%)</label><input type="number" id="apyMax" value="50" step="0.5"></div>
+    <div class="row"><label>Mean APY (%)</label><input type="number" id="apyMean" value="18" step="0.5"></div>
+    <div class="row"><label>Std Dev (%)</label><input type="number" id="apyStd" value="8" step="0.5"></div>
+  </div>
+  <div class="card">
+    <h3>Decay & Hold</h3>
+    <div class="row"><label>Half-Life (days)</label><input type="number" id="halfLife" value="2.5" step="0.5" min="0.5"></div>
+    <div class="row"><label>Min Hold (days)</label><input type="number" id="minHold" value="0.5" step="0.5"></div>
+    <div class="row"><label>Max Hold (days)</label><input type="number" id="maxHold" value="10" step="0.5"></div>
+  </div>
+</div>
+
+<h2 style="margin-top:16px;">Trading Costs & Execution</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Fees (per Contract)</h3>
+    <div class="row"><label>Maker Fee ($/contract)</label><input type="number" id="makerFee" value="0.04" step="0.01"></div>
+    <div class="row"><label>Taker Fee ($/contract)</label><input type="number" id="takerFee" value="0.06" step="0.01"></div>
+    <div class="row"><label>Contracts/Leg</label><input type="number" id="contracts" value="200" min="1"></div>
+  </div>
+  <div class="card">
+    <h3>Slippage & Exit</h3>
+    <div class="row"><label>Slippage (%)</label><input type="number" id="slippage" value="0.01" step="0.005"></div>
+    <div class="row"><label>Close Leg 1 As</label><select id="exit1"><option value="maker">Maker</option><option value="taker">Taker</option></select></div>
+    <div class="row"><label>Close Leg 2 As</label><select id="exit2"><option value="maker">Maker</option><option value="taker">Taker</option></select></div>
+  </div>
+  <div class="card">
+    <h3>Incentive Pool</h3>
+    <div class="row"><label>Monthly Pool ($)</label><input type="number" id="poolPay" value="100000" step="1000"></div>
+    <div class="row"><label>Exchange Maker Vol ($/mo)</label><input type="number" id="exchVol" value="100000000" step="1000000"></div>
+  </div>
+  <div class="card">
+    <h3>Simulation Control</h3>
+    <div class="row"><label># of Simulations</label><input type="number" id="numSims" value="5000" min="100" step="100"></div>
+    <div class="row"><label>Days to Simulate</label><input type="number" id="numDays" value="30" min="7" step="1"></div>
+    <div class="row"><label>Random Seed</label><input type="number" id="seed" value="42" min="1"></div>
+  </div>
+</div>
+
+<h2 style="margin-top:16px;">All Parameters Summary</h2>
+<div class="card">
+  <div id="paramSummary" style="font-size:12px;line-height:1.8;"></div>
+</div>
+
+<div style="margin-top:16px;">
+  <button class="btn" id="runBtn" onclick="runSimulation()">Run Monte Carlo Simulation</button>
+  <div class="progress" id="progressDiv" style="display:none;">
+    <div class="progress-bar" id="progressBar" style="width:0%;"></div>
+  </div>
+</div>
+
+<h2 style="margin-top:20px;">Results Summary</h2>
+<div id="resultsSummary"></div>
+
+<h2 style="margin-top:20px;">Distribution of Monthly PnL</h2>
+<div class="card">
+  <div id="distChart"></div>
+</div>
+
+<h2 style="margin-top:20px;">Detailed Statistics</h2>
+<div id="detailedStats"></div>
+
+<h2 style="margin-top:20px;">Scenario Breakdown</h2>
+<div class="card">
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Scenario</th><th class="num">Avg APY</th><th class="num">Rolls</th><th class="num">Avg Hold</th>
+          <th class="num">Arb PnL</th><th class="num">Incentive</th><th class="num">Fees</th><th class="num">Net PnL</th>
+          <th class="num">APY %</th><th>Win?</th>
+        </tr>
+      </thead>
+      <tbody id="scenarioBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Seeded random number generator
+function createRNG(seed) {
+  let s = seed;
+  return {
+    next() {
+      s = (s * 1664525 + 1013904223) & 0xffffffff;
+      return (s >>> 0) / 0xffffffff;
+    },
+    // Box-Muller transform for normal distribution
+    normal(mean, std) {
+      const u1 = this.next(), u2 = this.next();
+      const z = Math.sqrt(-2 * Math.log(u1 || 0.0001)) * Math.cos(2 * Math.PI * u2);
+      return mean + z * std;
+    },
+    // Uniform between min and max
+    uniform(min, max) {
+      return min + this.next() * (max - min);
+    },
+    // Exponential with given rate
+    exponential(rate) {
+      return -Math.log(this.next() || 0.0001) / rate;
+    }
+  };
+}
+
+function runSimulation() {
+  const btn = $('runBtn');
+  const progressDiv = $('progressDiv');
+  const progressBar = $('progressBar');
+  
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  progressDiv.style.display = 'block';
+  progressBar.style.width = '0%';
+  
+  // Read params
+  const capital = parseFloat($('capital').value) || 100000;
+  const leverage = parseFloat($('leverage').value) || 5;
+  const notional = capital * leverage;
+  $('notionalDisp').value = '$' + notional.toLocaleString();
+  
+  const apyMin = (parseFloat($('apyMin').value) || 5) / 100;
+  const apyMax = (parseFloat($('apyMax').value) || 50) / 100;
+  const apyMean = (parseFloat($('apyMean').value) || 18) / 100;
+  const apyStd = (parseFloat($('apyStd').value) || 8) / 100;
+  
+  const halfLife = parseFloat($('halfLife').value) || 2.5;
+  const minHold = parseFloat($('minHold').value) || 0.5;
+  const maxHold = parseFloat($('maxHold').value) || 10;
+  
+  const makerFeePerContract = parseFloat($('makerFee').value);
+  const takerFeePerContract = parseFloat($('takerFee').value);
+  const contractsPerLeg = parseInt($('contracts').value) || 200;
+  const slippagePct = (parseFloat($('slippage').value) || 0.01) / 100;
+  
+  const poolPay = parseFloat($('poolPay').value) || 100000;
+  const exchVol = parseFloat($('exchVol').value) || 100000000;
+  
+  const numSims = parseInt($('numSims').value) || 5000;
+  const numDays = parseInt($('numDays').value) || 30;
+  const seed = parseInt($('seed').value) || 42;
+  
+  const makerFeePerLeg = makerFeePerContract * contractsPerLeg;
+  const takerFeePerLeg = takerFeePerContract * contractsPerLeg;
+  const slippagePerLeg = slippagePct * notional;
+  const roundTripDollars = 2 * makerFeePerLeg + 2 * takerFeePerLeg + 2 * slippagePerLeg;
+  
+  const lambda = Math.log(2) / halfLife;
+  
+  // Run simulations
+  const scenarios = [];
+  const rng = createRNG(seed);
+  
+  for (let i = 0; i < numSims; i++) {
+    // Update progress every 100 sims
+    if (i % 100 === 0) {
+      progressBar.style.width = (i / numSims * 100) + '%';
+    }
+    
+    // Random APY from truncated normal (clamped to min/max)
+    let apy = rng.normal(apyMean, apyStd);
+    apy = Math.max(apyMin, Math.min(apyMax, apy));
+    
+    // Random hold period (exponential decay with min/max)
+    const holdDays = Math.max(minHold, Math.min(maxHold, rng.exponential(1 / halfLife)));
+    
+    // Calculate decay-adjusted APY over hold period
+    const decayFactor = (1 - Math.exp(-lambda * holdDays)) / (lambda * holdDays);
+    const medianApy = apy * 0.4; // assume median is 40% of current
+    const avgApy = medianApy + (apy - medianApy) * decayFactor;
+    
+    // Number of rolls in the period
+    const numRolls = Math.floor(numDays / holdDays);
+    
+    // Arb PnL
+    const arbPnl = (avgApy * holdDays / 365) * notional * numRolls;
+    
+    // Fees
+    const fees = numRolls * roundTripDollars;
+    
+    // Maker volume (futures leg only)
+    const makerVol = numRolls * notional;
+    const poolShare = makerVol / exchVol;
+    const incentive = poolShare * poolPay * (numDays / 30);
+    
+    // Net PnL
+    const netPnl = arbPnl + incentive - fees;
+    const apyPct = (netPnl * 365 / numDays) / capital * 100;
+    
+    scenarios.push({
+      apy: apy * 100,
+      holdDays,
+      numRolls,
+      arbPnl,
+      incentive,
+      fees,
+      netPnl,
+      apyPct,
+      win: netPnl > 0
+    });
+  }
+  
+  progressBar.style.width = '100%';
+  
+  // Calculate statistics
+  const totalNet = scenarios.reduce((s, x) => s + x.netPnl, 0);
+  const avgNet = totalNet / numSims;
+  const wins = scenarios.filter(x => x.win).length;
+  const winRate = wins / numSims * 100;
+  
+  const sortedNet = scenarios.map(x => x.netPnl).sort((a, b) => a - b);
+  const minNet = sortedNet[0];
+  const maxNet = sortedNet[sortedNet.length - 1];
+  const medianNet = sortedNet[Math.floor(sortedNet.length / 2)];
+  const p10 = sortedNet[Math.floor(sortedNet.length * 0.1)];
+  const p25 = sortedNet[Math.floor(sortedNet.length * 0.25)];
+  const p75 = sortedNet[Math.floor(sortedNet.length * 0.75)];
+  const p90 = sortedNet[Math.floor(sortedNet.length * 0.9)];
+  
+  const variance = scenarios.reduce((s, x) => s + Math.pow(x.netPnl - avgNet, 2), 0) / numSims;
+  const stdDev = Math.sqrt(variance);
+  
+  const avgApy = scenarios.reduce((s, x) => s + x.apy, 0) / numSims;
+  const avgRolls = scenarios.reduce((s, x) => s + x.numRolls, 0) / numSims;
+  const avgHold = scenarios.reduce((s, x) => s + x.holdDays, 0) / numSims;
+  const avgArb = scenarios.reduce((s, x) => s + x.arbPnl, 0) / numSims;
+  const avgInc = scenarios.reduce((s, x) => s + x.incentive, 0) / numSims;
+  const avgFees = scenarios.reduce((s, x) => s + x.fees, 0) / numSims;
+  
+  // Control (hold 15% APY)
+  const controlPnl = (0.15 / 12) * notional;
+  
+  // Display summary
+  $('resultsSummary').innerHTML = `
+    <div class="grid">
+      <div class="card ${avgNet > controlPnl ? 'highlight' : ''}">
+        <div class="result-label">Avg Monthly PnL</div>
+        <div class="result ${avgNet >= 0 ? 'green' : 'red'}">$${avgNet.toFixed(2)}</div>
+        <div class="note">Control (15% APY): $${controlPnl.toFixed(2)}</div>
+      </div>
+      <div class="card">
+        <div class="result-label">Win Rate</div>
+        <div class="result ${winRate > 50 ? 'green' : 'red'}">${winRate.toFixed(1)}%</div>
+        <div class="note">Scenarios with positive PnL</div>
+      </div>
+      <div class="card">
+        <div class="result-label">Avg Effective APY</div>
+        <div class="result accent">${(avgNet * 12 / capital * 100).toFixed(1)}%</div>
+        <div class="note">Annualized return on capital</div>
+      </div>
+      <div class="card">
+        <div class="result-label">Avg Rolls/Mo</div>
+        <div class="result">${avgRolls.toFixed(1)}</div>
+        <div class="note">Avg hold: ${avgHold.toFixed(1)} days</div>
+      </div>
+    </div>
+  `;
+  
+  // Distribution chart
+  const numBins = 30;
+  const binSize = (maxNet - minNet) / numBins;
+  const bins = new Array(numBins).fill(0);
+  scenarios.forEach(s => {
+    const binIdx = Math.min(numBins - 1, Math.max(0, Math.floor((s.netPnl - minNet) / binSize)));
+    bins[binIdx]++;
+  });
+  const maxBin = Math.max(...bins);
+  
+  let distHtml = '<div style="display:flex;align-items:end;gap:1px;height:200px;padding:10px 0;">';
+  bins.forEach((count, i) => {
+    const binMin = minNet + i * binSize;
+    const height = count / maxBin * 180;
+    const color = binMin >= 0 ? '#3fb950' : '#f85149';
+    distHtml += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:end;height:100%;">
+      <div style="width:100%;max-width:18px;height:${height}px;background:${color};border-radius:2px 2px 0 0;min-height:1px;" title="$${binMin.toFixed(0)}: ${count} scenarios"></div>
+    </div>`;
+  });
+  distHtml += '</div>';
+  distHtml += `<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);">
+    <span>$${minNet.toFixed(0)}</span><span>$${medianNet.toFixed(0)}</span><span>$${maxNet.toFixed(0)}</span>
+  </div>`;
+  distHtml += '<div style="text-align:center;font-size:11px;color:var(--muted);margin-top:4px;">Monthly PnL Distribution (Green = Profit, Red = Loss)</div>';
+  $('distChart').innerHTML = distHtml;
+  
+  // Detailed stats
+  $('detailedStats').innerHTML = `
+    <div class="grid">
+      <div class="card">
+        <h3>Percentiles</h3>
+        <table>
+          <tr><td>Worst Case</td><td class="num ${minNet < 0 ? 'red' : 'green'}">$${minNet.toFixed(2)}</td></tr>
+          <tr><td>10th Percentile</td><td class="num ${p10 < 0 ? 'red' : 'green'}">$${p10.toFixed(2)}</td></tr>
+          <tr><td>25th Percentile</td><td class="num ${p25 < 0 ? 'red' : 'green'}">$${p25.toFixed(2)}</td></tr>
+          <tr><td>Median (50th)</td><td class="num ${medianNet < 0 ? 'red' : 'green'}">$${medianNet.toFixed(2)}</td></tr>
+          <tr><td>75th Percentile</td><td class="num ${p75 < 0 ? 'red' : 'green'}">$${p75.toFixed(2)}</td></tr>
+          <tr><td>90th Percentile</td><td class="num ${p90 < 0 ? 'red' : 'green'}">$${p90.toFixed(2)}</td></tr>
+          <tr><td>Best Case</td><td class="num ${maxNet < 0 ? 'red' : 'green'}">$${maxNet.toFixed(2)}</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Risk Metrics</h3>
+        <table>
+          <tr><td>Mean</td><td class="num ${avgNet < 0 ? 'red' : 'green'}">$${avgNet.toFixed(2)}</td></tr>
+          <tr><td>Std Dev</td><td class="num">$${stdDev.toFixed(2)}</td></tr>
+          <tr><td>Sharpe (monthly)</td><td class="num">${(avgNet / stdDev).toFixed(3)}</td></tr>
+          <tr><td>Win Rate</td><td class="num ${winRate > 50 ? 'green' : 'red'}">${winRate.toFixed(1)}%</td></tr>
+          <tr><td>Max Drawdown</td><td class="num red">$${minNet.toFixed(2)}</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Averages</h3>
+        <table>
+          <tr><td>Avg APY</td><td class="num">${avgApy.toFixed(1)}%</td></tr>
+          <tr><td>Avg Rolls</td><td class="num">${avgRolls.toFixed(1)}</td></tr>
+          <tr><td>Avg Hold</td><td class="num">${avgHold.toFixed(1)}d</td></tr>
+          <tr><td>Avg Arb PnL</td><td class="num green">$${avgArb.toFixed(2)}</td></tr>
+          <tr><td>Avg Incentive</td><td class="num accent">$${avgInc.toFixed(2)}</td></tr>
+          <tr><td>Avg Fees</td><td class="num red">$${avgFees.toFixed(2)}</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Verdict</h3>
+        <div class="result ${avgNet > controlPnl ? 'green' : 'red'}" style="font-size:32px;">
+          ${avgNet > controlPnl ? 'ROLL' : 'HOLD'}
+        </div>
+        <div class="note" style="margin-top:8px;">
+          ${avgNet > controlPnl 
+            ? `Rolling + incentives beats hold by <strong>$${(avgNet - controlPnl).toFixed(2)}/mo</strong>` 
+            : `Holding 15% APY beats rolling by <strong>$${(controlPnl - avgNet).toFixed(2)}/mo</strong>`}
+        </div>
+        <div class="note" style="margin-top:4px;">
+          Win rate: ${winRate.toFixed(1)}% | Avg APY: ${(avgNet * 12 / capital * 100).toFixed(1)}%
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Scenario table (sample of 20)
+  const sampleSize = 20;
+  const step = Math.floor(numSims / sampleSize);
+  const samples = [];
+  for (let i = 0; i < numSims; i += step) {
+    samples.push(scenarios[i]);
+  }
+  
+  const tbody = $('scenarioBody');
+  tbody.innerHTML = '';
+  samples.forEach(s => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>#${samples.indexOf(s) + 1}</td>
+      <td class="num">${s.apy.toFixed(1)}%</td>
+      <td class="num">${s.numRolls}</td>
+      <td class="num">${s.holdDays.toFixed(1)}</td>
+      <td class="num green">+$${s.arbPnl.toFixed(2)}</td>
+      <td class="num accent">+$${s.incentive.toFixed(2)}</td>
+      <td class="num red">-$${s.fees.toFixed(2)}</td>
+      <td class="num ${s.netPnl >= 0 ? 'green' : 'red'}"><strong>$${s.netPnl.toFixed(2)}</strong></td>
+      <td class="num">${s.apyPct.toFixed(1)}%</td>
+      <td><span class="pill ${s.win ? 'green' : 'red'}">${s.win ? 'WIN' : 'LOSS'}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  
+  btn.disabled = false;
+  btn.textContent = 'Run Monte Carlo Simulation';
+  setTimeout(() => { progressDiv.style.display = 'none'; }, 500);
+}
+
+// Initialize
+$('notionalDisp').value = '$' + (100000 * 5).toLocaleString();
+updateParamSummary();
+
+function updateParamSummary() {
+  const capital = parseFloat($('capital').value) || 0;
+  const leverage = parseFloat($('leverage').value) || 0;
+  const notional = capital * leverage;
+  const numTokens = parseInt($('numTokens').value) || 0;
+  const numSpreads = parseInt($('numSpreads').value) || 0;
+  $('totalSpreads').value = numTokens * numSpreads;
+  $('notionalDisp').value = '$' + notional.toLocaleString();
+  const apyMin = parseFloat($('apyMin').value) || 0;
+  const apyMax = parseFloat($('apyMax').value) || 0;
+  const apyMean = parseFloat($('apyMean').value) || 0;
+  const apyStd = parseFloat($('apyStd').value) || 0;
+  const halfLife = parseFloat($('halfLife').value) || 0;
+  const minHold = parseFloat($('minHold').value) || 0;
+  const maxHold = parseFloat($('maxHold').value) || 0;
+  const makerFee = parseFloat($('makerFee').value) || 0;
+  const takerFee = parseFloat($('takerFee').value) || 0;
+  const contracts = parseInt($('contracts').value) || 0;
+  const slippage = parseFloat($('slippage').value) || 0;
+  const exit1 = $('exit1').value;
+  const exit2 = $('exit2').value;
+  const poolPay = parseFloat($('poolPay').value) || 0;
+  const exchVol = parseFloat($('exchVol').value) || 0;
+  const numSims = parseInt($('numSims').value) || 0;
+  const numDays = parseInt($('numDays').value) || 0;
+  const seed = parseInt($('seed').value) || 0;
+
+  $('paramSummary').innerHTML = `
+    <strong>Capital & Leverage:</strong> $${capital.toLocaleString()} capital × ${leverage}× leverage = $${notional.toLocaleString()} notional<br>
+    <strong>Token Universe:</strong> ${numTokens} tokens × ${numSpreads} spreads = ${numTokens * numSpreads} total spreads<br>
+    <strong>APY Distribution:</strong> ${apyMin}% min / ${apyMax}% max / ${apyMean}% mean / ${apyStd}% std dev<br>
+    <strong>Decay & Hold:</strong> ${halfLife}d half-life / ${minHold}d min hold / ${maxHold}d max hold<br>
+    <strong>Fees:</strong> $${makerFee}/contract maker / $${takerFee}/contract taker / ${contracts} contracts/leg<br>
+    <strong>Slippage & Exit:</strong>${slippage}% slippage / Close leg 1 as ${exit1} / Close leg 2 as ${exit2}<br>
+    <strong>Pool:</strong> $${poolPay.toLocaleString()}/mo pool / $${exchVol.toLocaleString()}/mo exchange maker vol<br>
+    <strong>Simulation:</strong> ${numSims} scenarios / ${numDays} days / seed ${seed}
+  `;
+}
+
+// Update summary on any input change
+document.querySelectorAll('input, select').forEach(el => {
+  el.addEventListener('input', updateParamSummary);
+  el.addEventListener('change', updateParamSummary);
+}
+</script>
+</body>
+</html>

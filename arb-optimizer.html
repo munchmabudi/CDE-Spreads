@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Arb + Incentive Optimizer</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --green:#3fb950; --red:#f85149; --yellow:#d29922; --orange:#f0883e; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'SF Mono','Consolas',monospace; background:var(--bg); color:var(--fg); padding:24px; font-size:13px; }
+  h1 { font-size:16px; margin-bottom:4px; }
+  h2 { font-size:13px; color:var(--accent); margin:20px 0 10px; border-bottom:1px solid var(--border); padding-bottom:4px; }
+  h3 { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+  .subtitle { color:var(--muted); font-size:11px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; }
+  label { display:block; font-size:10px; color:var(--muted); text-transform:uppercase; margin-bottom:2px; }
+  input,select { background:var(--bg); border:1px solid var(--border); color:var(--fg); padding:5px 8px; border-radius:4px; width:100%; font-family:inherit; font-size:12px; }
+  input:focus,select:focus { outline:none; border-color:var(--accent); }
+  .row { margin-bottom:8px; }
+  .result { font-size:22px; font-weight:bold; }
+  .result-sm { font-size:16px; font-weight:bold; }
+  .result-label { font-size:10px; color:var(--muted); text-transform:uppercase; }
+  .green { color:var(--green); }
+  .red { color:var(--red); }
+  .yellow { color:var(--yellow); }
+  .accent { color:var(--accent); }
+  .orange { color:var(--orange); }
+  .note { font-size:10px; color:var(--muted); margin-top:3px; }
+  .full { grid-column:1/-1; }
+  .formula { background:var(--bg); padding:10px; border-radius:6px; font-size:11px; margin:8px 0; border-left:2px solid var(--accent); }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; color:var(--muted); font-size:9px; text-transform:uppercase; padding:4px; border-bottom:1px solid var(--border); }
+  td { padding:3px 4px; border-bottom:1px solid rgba(48,54,61,0.4); font-size:11px; }
+  .num { text-align:right; }
+  .pill { display:inline-block; padding:1px 6px; border-radius:8px; font-size:9px; font-weight:bold; }
+  .pill.green { background:rgba(63,185,80,0.15); color:var(--green); }
+  .pill.red { background:rgba(248,81,73,0.15); color:var(--red); }
+  .pill.yellow { background:rgba(210,153,34,0.15); color:var(--yellow); }
+  .scroll { max-height:400px; overflow-y:auto; }
+  .btn { background:var(--accent); color:var(--bg); border:none; padding:6px 14px; border-radius:4px; font-family:inherit; font-size:11px; font-weight:bold; cursor:pointer; }
+  .btn:hover { opacity:0.9; }
+  .btn-sec { background:var(--card); color:var(--fg); border:1px solid var(--border); }
+  .optimum { background:rgba(63,185,80,0.08); }
+  .control { background:rgba(88,166,255,0.08); }
+  .slider-row { display:flex; align-items:center; gap:8px; }
+  .slider-row input[type=range] { flex:1; }
+  .slider-val { font-size:11px; color:var(--accent); min-width:50px; text-align:right; }
+  .apy-display { font-size:28px; font-weight:bold; }
+  .pnl-display { font-size:18px; font-weight:bold; }
+  .grid-comparison {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-areas:
+      "control rollNoInc rollInc"
+      ". rollAdds incAdds";
+    gap: 12px;
+  }
+  .grid-comparison .control { grid-area: control; }
+  .grid-comparison .rollNoInc { grid-area: rollNoInc; }
+  .grid-comparison .optimum { grid-area: rollInc; }
+  .grid-comparison .rollAdds, .grid-comparison .incAdds {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+</style>
+</head>
+<body>
+
+<h1>Arb + Incentive Optimizer</h1>
+<p class="subtitle">From today's snapshot + your read on the market, estimate roll frequency and find the strategy that maximizes APY + incentive pools.</p>
+
+<!-- Snapshot -->
+<h2>Today's Snapshot</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Your Universe</h3>
+    <div class="row"><label>Tokens</label><input type="number" id="numTokens" value="17" min="1"></div>
+    <div class="row"><label>Spreads per Token</label><input type="number" id="numSpreads" value="3" min="1"></div>
+    <div class="row"><label>Total Spreads</label><input type="text" id="totalSpreads" readonly tabindex="-1"></div>
+  </div>
+  <div class="card">
+    <h3>Spread Distribution Today</h3>
+    <div class="row"><label>Best APY (%)</label><input type="number" id="bestApy" value="26.55" step="0.1"></div>
+    <div class="row"><label>Median APY (%)</label><input type="number" id="medianApy" value="12" step="0.1"></div>
+    <div class="row"><label>Worst APY (%)</label><input type="number" id="worstApy" value="4.1" step="0.1"></div>
+  </div>
+  <div class="card">
+    <h3>Your Thresholds</h3>
+    <div class="row"><label>"Good" APY Threshold (%)</label><input type="number" id="goodThreshold" value="20" step="0.5"></div>
+    <div class="row"><label>Currently ≥ Threshold</label><input type="text" id="numGood" readonly tabindex="-1"></div>
+    <div class="row"><label>Fraction Above</label><input type="text" id="fracAbove" readonly tabindex="-1"></div>
+  </div>
+</div>
+
+<!-- Market Environment Sliders -->
+<h2>Market Environment — Your Read</h2>
+<div class="grid">
+  <div class="card">
+    <h3>Mean Reversion Speed</h3>
+    <p class="note" style="margin-bottom:8px;">When a spread spikes to 25%, how fast does it come back down?</p>
+    <div class="row">
+      <label>Decay Half-Life (days)</label>
+      <div class="slider-row">
+        <input type="range" id="halfLife" min="0.1" max="10" step="0.1" value="2.5">
+        <span class="slider-val" id="halfLifeVal">2.5d</span>
+      </div>
+    </div>
+    <div class="row">
+      <label>Quick Set:</label>
+      <select id="regimeSelect" onchange="setRegime()">
+        <option value="custom">Custom</option>
+        <option value="extreme">Extreme (0.5d)</option>
+        <option value="volatile">Volatile (1d)</option>
+        <option value="normal" selected>Normal (2.5d)</option>
+        <option value="calm">Calm (5d)</option>
+      </select>
+    </div>
+    <div class="formula" id="decayFormula">A 25% spread → 12.5% in 5 days → 6.25% in 10 days</div>
+  </div>
+  <div class="card">
+    <h3>New High-Spread Arrival</h3>
+    <p class="note" style="margin-bottom:8px;">How often does a NEW spread appear that's above your threshold?</p>
+    <div class="row">
+      <label>Arrival Rate (per day)</label>
+      <div class="slider-row">
+        <input type="range" id="arrivalRate" min="0.01" max="5" step="0.01" value="0.5">
+        <span class="slider-val" id="arrivalVal">0.50/d</span>
+      </div>
+    </div>
+    <div class="row">
+      <label>Quick Set:</label>
+      <select id="flowSelect" onchange="setFlow()">
+        <option value="custom">Custom</option>
+        <option value="dead">Dead (0.1/d)</option>
+        <option value="slow">Slow (0.3/d)</option>
+        <option value="moderate" selected>Moderate (0.5/d)</option>
+        <option value="active">Active (1/d)</option>
+        <option value="frenzy">Frenzy (3/d)</option>
+      </select>
+    </div>
+    <div class="formula" id="arrivalFormula">Expected wait for a new "good" spread: 2.0 days</div>
+  </div>
+  <div class="card">
+    <h3>Correlation / Clustering</h3>
+    <p class="note" style="margin-bottom:8px;">Do spreads move together or independently?</p>
+    <div class="row">
+      <label>Avg Correlation Between Tokens</label>
+      <div class="slider-row">
+        <input type="range" id="correlation" min="0" max="0.95" step="0.05" value="0.4">
+        <span class="slider-val" id="corrVal">0.40</span>
+      </div>
+    </div>
+    <div class="formula" id="corrFormula">Higher correlation = fewer independent opportunities = less rolling</div>
+  </div>
+</div>
+
+<!-- Costs & Capital -->
+<h2>Costs & Capital</h2>
+<div class="grid2">
+  <div class="card">
+    <h3>Trading Costs (Fixed per Contract)</h3>
+    <div class="row"><label>Maker Fee ($/contract)</label><input type="number" id="makerFee" value="0.04" step="0.01"></div>
+    <div class="row"><label>Taker Fee ($/contract)</label><input type="number" id="takerFee" value="0.06" step="0.01"></div>
+    <div class="row"><label>Contracts per Leg</label><input type="number" id="contracts" value="200" min="1"></div>
+    <div class="row"><label>Slippage (% of notional)</label><input type="number" id="slippage" value="0.02" step="0.005"></div>
+    <div class="row"><label>Exit Leg 1</label><select id="exit1"><option value="maker">Maker</option><option value="taker">Taker</option></select></div>
+    <div class="row"><label>Exit Leg 2</label><select id="exit2"><option value="maker">Maker</option><option value="taker">Taker</option></select></div>
+  </div>
+  <div class="card">
+    <h3>Capital & Pools</h3>
+    <div class="row"><label>Capital ($)</label><input type="number" id="capital" value="100000" min="1"></div>
+    <div class="row"><label>Leverage (×)</label><input type="number" id="leverage" value="5" min="1" step="0.5"></div>
+    <div class="row"><label>Notional/Side ($)</label><input type="text" id="notionalDisp" readonly tabindex="-1"></div>
+    <div class="row"><label>Pool Payout ($/mo)</label><input type="number" id="poolPay" value="100000" step="1000"></div>
+    <div class="row"><label>Daily Dated Futures Volume (from Coinbase)</label><input type="text" id="dailyDatedFutures" value="$7,200,000" readonly tabindex="-1"></div>
+    <div class="row"><label>Monthly Equivalent (×30)</label><input type="text" id="monthlyDatedFutures" value="$216,000,000" readonly tabindex="-1"></div>
+    <div class="row"><label>Summary</label></div>
+    <div class="formula" id="datedFuturesDisplay">$7,200,000/d = $216,000,000/mo estimate</div>
+    <div class="row"><label>Exchange Maker Vol ($/mo)</label><input type="number" id="exchVol" value="108000000" step="1000000"></div>
+    <div class="row"><label>Note</label></div>
+    <div class="formula" id="exchVolNote">Use the above to help determine your maker volume estimate. This is the total maker volume for the front 2 months of dated futures on Coinbase Derivatives.</div>
+  </div>
+</div>
+
+<!-- Cost Summary -->
+<div class="card" style="margin-top:12px;">
+  <h3>Cost Summary (per Roll)</h3>
+  <div class="grid2">
+    <div>
+      <div class="result-label">Round-Trip Fee ($)</div>
+      <div class="result" id="feeDollars">—</div>
+      <div class="note" id="feeNote"></div>
+    </div>
+    <div>
+      <div class="result-label">Round-Trip Fee (% of notional)</div>
+      <div class="result" id="feePct">—</div>
+      <div class="note">As percentage of notional</div>
+    </div>
+  </div>
+</div>
+
+<!-- Results -->
+<h2>Results</h2>
+
+<div class="card full">
+  <h3>Optimal Strategy</h3>
+  <div class="grid">
+    <div>
+      <div class="result-label">Optimal Rolls/Month</div>
+      <div class="result" id="optRolls">—</div>
+      <div class="note">The number of rolls that maximizes total PnL</div>
+    </div>
+    <div>
+      <div class="result-label">Optimal Effective APY</div>
+      <div class="result accent" id="optApy">—</div>
+      <div class="note">APY after fees + incentive income, annualized</div>
+    </div>
+    <div>
+      <div class="result-label">Optimal Monthly PnL</div>
+      <div class="result green" id="optPnl">—</div>
+      <div class="note">Total: arb + incentive - fees</div>
+    </div>
+  </div>
+</div>
+
+<!-- Control vs Rolling -->
+<div class="card full" style="margin-top:12px;">
+  <h3>Control vs Rolling Comparison</h3>
+  <div class="grid-comparison">
+    <!-- Top row -->
+    <div class="card control">
+      <h3>Control: Hold 15% APY</h3>
+      <div class="result-label">Monthly PnL</div>
+      <div class="pnl-display" id="controlPnl">—</div>
+      <div class="result-label" style="margin-top:8px;">Annualized APY</div>
+      <div class="apy-display green" id="controlApy">—</div>
+      <div class="note" id="controlNote"></div>
+    </div>
+    <div class="card rollNoInc">
+      <h3>Rolling (No Incentive)</h3>
+      <div class="result-label">Monthly PnL</div>
+      <div class="pnl-display" id="rollNoIncPnl">—</div>
+      <div class="result-label" style="margin-top:8px;">Annualized APY</div>
+      <div class="apy-display accent" id="rollNoIncApy">—</div>
+      <div class="note" id="rollNoIncNote"></div>
+    </div>
+    <div class="card optimum">
+      <h3>Rolling + Incentive</h3>
+      <div class="result-label">Monthly PnL</div>
+      <div class="pnl-display" id="rollIncPnl">—</div>
+      <div class="result-label" style="margin-top:8px;">Annualized APY</div>
+      <div class="apy-display green" id="rollIncApy">—</div>
+      <div class="note" id="rollIncNote"></div>
+    </div>
+    <!-- Bottom row: deltas aligned under the panels they describe -->
+    <div class="rollAdds">
+      <div class="result-label">Rolling Adds vs Control</div>
+      <div class="result" id="rollAdds">—</div>
+      <div class="note">How much more rolling earns vs holding 15%</div>
+    </div>
+    <div class="incAdds">
+      <div class="result-label">Rolling + Incentive adds</div>
+      <div class="result accent" id="incAdds">—</div>
+      <div class="note">How much rolling + pool earns vs holding 15%</div>
+    </div>
+  </div>
+  <!-- Total Edge as full-width summary -->
+  <div style="margin-top:12px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
+    <div>
+      <div class="result-label">Total Edge (Rolling + Incentive vs Control)</div>
+      <div class="note">Combined advantage of rolling + pool over hold</div>
+    </div>
+    <div class="result green" id="totalEdge" style="font-size:24px;">—</div>
+  </div>
+</div>
+
+<!-- Maker Volume Analysis -->
+<div class="card full" style="margin-top:12px;">
+  <h3>Futures Maker Volume Analysis</h3>
+  <div class="grid">
+    <div>
+      <div class="result-label">Your Monthly Maker Vol</div>
+      <div class="result accent" id="yourMakerVol">—</div>
+      <div class="note">From rolling activity (2 legs × notional × rolls)</div>
+    </div>
+    <div>
+      <div class="result-label">% of Exchange Volume</div>
+      <div class="result" id="volPct">—</div>
+      <div class="note">Your share of total maker volume</div>
+    </div>
+    <div>
+      <div class="result-label">Pool Income</div>
+      <div class="result green" id="poolIncome">—</div>
+      <div class="note">Monthly incentive from pool share</div>
+    </div>
+  </div>
+</div>
+
+<!-- Tradeoff Table -->
+<div class="card full" style="margin-top:12px;">
+  <h3>The Tradeoff — More Rolling = More Incentive but More Fees</h3>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Rolls/Mo</th><th class="num">Avg Spread APY</th><th class="num">Arb PnL</th><th class="num">Incentive Income</th>
+          <th class="num">Rolling Fees</th><th class="num">Net PnL</th><th class="num">Effective APY</th><th>Verdict</th>
+        </tr>
+      </thead>
+      <tbody id="tradeoffBody"></tbody>
+    </table>
+  </div>
+  <p class="note" style="margin-top:6px;">The green row is your optimum — where rolling more would cost more in fees than it gains in incentive + spread.</p>
+</div>
+
+<!-- How the Model Works -->
+<h2 style="margin-top:20px;">How It Works</h2>
+<div class="card">
+  <h3>From Snapshot to Roll Frequency</h3>
+  <div class="formula" id="modelFormula"></div>
+  <table>
+    <thead><tr><th>Step</th><th>What Happens</th><th class="num">Value</th></tr></thead>
+    <tbody id="stepsBody"></tbody>
+  </table>
+</div>
+
+<!-- Sensitivity -->
+<h2 style="margin-top:20px;">Sensitivity</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>If This Changes</th><th class="num">Optimal Rolls/Mo</th><th class="num">Optimal APY</th><th>Effect</th></tr></thead>
+    <tbody id="sensBody"></tbody>
+  </table>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function setRegime() {
+  const r = $('regimeSelect').value;
+  const map = { extreme: 0.5, volatile: 1, normal: 2.5, calm: 5 };
+  if (r !== 'custom') { $('halfLife').value = map[r]; $('halfLifeVal').textContent = map[r].toFixed(1)+'d'; calc(); }
+}
+
+function setFlow() {
+  const f = $('flowSelect').value;
+  const map = { dead: 0.1, slow: 0.3, moderate: 0.5, active: 1, frenzy: 3 };
+  if (f !== 'custom') { $('arrivalRate').value = map[f]; $('arrivalVal').textContent = map[f].toFixed(2)+'/d'; calc(); }
+}
+
+// Remove old updateExchVol - no longer needed
+
+$('halfLife').addEventListener('input', e => { $('halfLifeVal').textContent = parseFloat(e.target.value).toFixed(1)+'d'; $('regimeSelect').value='custom'; calc(); });
+$('arrivalRate').addEventListener('input', e => { $('arrivalVal').textContent = parseFloat(e.target.value).toFixed(2)+'/d'; $('flowSelect').value='custom'; calc(); });
+$('correlation').addEventListener('input', e => { $('corrVal').textContent = parseFloat(e.target.value).toFixed(2); calc(); });
+
+function calc() {
+  const numTokens = parseInt($('numTokens').value) || 17;
+  const numSpreads = parseInt($('numSpreads').value) || 3;
+  const totalPossible = numTokens * numSpreads;
+  const bestApy = parseFloat($('bestApy').value) / 100;
+  const medianApy = parseFloat($('medianApy').value) / 100;
+  const worstApy = parseFloat($('worstApy').value) / 100;
+  const goodThreshold = parseFloat($('goodThreshold').value) / 100;
+
+  // Sliders
+  const halfLife = parseFloat($('halfLife').value);
+  const arrivalRate = parseFloat($('arrivalRate').value);
+  const correlation = parseFloat($('correlation').value);
+
+  const makerFeePerContract = parseFloat($('makerFee').value);
+  const takerFeePerContract = parseFloat($('takerFee').value);
+  const contractsPerLeg = parseInt($('contracts').value) || 200;
+  const slippagePct = (parseFloat($('slippage').value) || 0) / 100;
+  const exit1 = $('exit1').value;
+  const exit2 = $('exit2').value;
+  const capital = Math.max(1, parseFloat($('capital').value) || 20000);
+  const leverage = Math.max(1, parseFloat($('leverage').value) || 5);
+  const notional = capital * leverage;
+  const poolPay = parseFloat($('poolPay').value) || 0;
+  const exchVol = Math.max(1, parseFloat($('exchVol').value) || 1);
+
+  // Cost calculation
+  const makerFeePerLeg = makerFeePerContract * contractsPerLeg;
+  const takerFeePerLeg = takerFeePerContract * contractsPerLeg;
+  const slippagePerLeg = slippagePct * notional;
+  const close1 = exit1 === 'taker' ? (takerFeePerLeg + slippagePerLeg) : makerFeePerLeg;
+  const close2 = exit2 === 'taker' ? (takerFeePerLeg + slippagePerLeg) : makerFeePerLeg;
+  const openNewTaker = takerFeePerLeg + slippagePerLeg;
+  const openNewMaker = makerFeePerLeg;
+  const roundTripDollars = close1 + close2 + openNewTaker + openNewMaker;
+  const roundTripPct = roundTripDollars / notional;
+
+  $('feeDollars').textContent = '$' + roundTripDollars.toFixed(2);
+  $('feeNote').textContent = `Close: $${(close1+close2).toFixed(2)} + Open: $${(openNewTaker+openNewMaker).toFixed(2)}`;
+  $('feePct').textContent = (roundTripPct * 100).toFixed(4) + '%';
+
+  // Fraction above threshold
+  const fracAbove = Math.max(0.02, Math.min(0.98,
+    goodThreshold >= bestApy ? 0.02 :
+    goodThreshold <= worstApy ? 0.98 :
+    goodThreshold >= medianApy ?
+      0.5 * (1 - (goodThreshold - medianApy) / (bestApy - medianApy)) :
+      0.5 + 0.5 * (medianApy - goodThreshold) / (medianApy - worstApy)
+  ));
+  const numGood = Math.max(1, Math.round(totalPossible * fracAbove));
+
+  $('totalSpreads').value = totalPossible;
+  $('notionalDisp').value = '$' + notional.toLocaleString();
+  $('numGood').value = numGood + ' of ' + totalPossible;
+  $('fracAbove').value = (fracAbove * 100).toFixed(1) + '%';
+
+  // Roll frequency model
+  const effSpreads = totalPossible * (1 - correlation);
+  const effArrival = arrivalRate * (1 - correlation);
+  const expectedWait = 1 / Math.max(0.01, effArrival);
+
+  const lambda = Math.log(2) / halfLife;
+  let persistence;
+  if (goodThreshold <= medianApy) persistence = 30;
+  else if (goodThreshold >= bestApy) persistence = 0;
+  else {
+    const ratio = (goodThreshold - medianApy) / (bestApy - medianApy);
+    persistence = ratio > 0 ? -Math.log(ratio) / lambda : 0;
+  }
+
+  const forcedRate = persistence > 0 && persistence < 30 ? 1 / persistence : 0;
+  const oppRate = 1 / expectedWait;
+  const maxRollRate = Math.min(1, forcedRate + oppRate);
+  const maxRollsMo = maxRollRate * 30;
+
+  // Optimization
+  const results = [];
+  for (let n = 0; n <= Math.min(30, Math.ceil(maxRollsMo)); n++) {
+    // Only the futures leg counts as maker volume (perp is taker)
+    const makerVol = n * notional;
+    const poolShare = makerVol / exchVol;
+    const incentive = poolShare * poolPay;
+    const fees = n * roundTripDollars;
+    // Each leg: holdDays = 30/n. APY resets to best each roll (market persists).
+    // Decay within each leg reduces avgAPY.
+    const holdDays = n > 0 ? 30 / n : 30;
+    // avgAPY over hold period with exponential decay from best toward median
+    const avgAPY = medianApy + (bestApy - medianApy) * (1 - Math.exp(-lambda * holdDays)) / (lambda * holdDays);
+    // Total arb for the month: legs × notional × avgAPY × holdDays / 365
+    // = notional × avgAPY × 30 / 365
+    const arbPnl = (avgAPY * 30 / 365) * notional;
+    const netPnl = arbPnl + incentive - fees;
+    const effApy = (netPnl * 12) / capital;
+    results.push({ n, avgSpread: avgAPY, arbPnl, incentive, fees, netPnl, effApy, makerVol, poolShare });
+  }
+
+  let optIdx = 0;
+  for (let i = 1; i < results.length; i++) {
+    if (results[i].netPnl > results[optIdx].netPnl) optIdx = i;
+  }
+  const opt = results[optIdx];
+
+  // Control: Hold 15%
+  const controlApy = 0.15;
+  const controlArb = (controlApy / 12) * notional;
+  const controlPnl = controlArb;
+  const controlEffApy = (controlPnl * 12) / capital;
+
+  // Rolling without incentive
+  let optNoIncIdx = 0;
+  for (let i = 1; i < results.length; i++) {
+    const noIncPnl = results[i].arbPnl - results[i].fees;
+    const bestNoIncPnl = results[optNoIncIdx].arbPnl - results[optNoIncIdx].fees;
+    if (noIncPnl > bestNoIncPnl) optNoIncIdx = i;
+  }
+  const optNoInc = results[optNoIncIdx];
+
+  // Display
+  $('optRolls').textContent = opt.n + ' /mo';
+  $('optRolls').className = 'result ' + (opt.n > 0 ? 'green' : 'yellow');
+  $('optApy').textContent = (opt.effApy * 100).toFixed(1) + '%';
+  $('optPnl').textContent = '$' + opt.netPnl.toFixed(2) + '/mo';
+
+  // Control comparison with APY
+  $('controlPnl').textContent = '$' + controlPnl.toFixed(2) + '/mo';
+  $('controlApy').textContent = (controlEffApy * 100).toFixed(1) + '%';
+  $('controlNote').textContent = 'No rolling, no extra incentive';
+
+  $('rollNoIncPnl').textContent = '$' + (optNoInc.arbPnl - optNoInc.fees).toFixed(2) + '/mo';
+  $('rollNoIncApy').textContent = (((optNoInc.arbPnl - optNoInc.fees) * 12 / capital) * 100).toFixed(1) + '%';
+  $('rollNoIncNote').textContent = `${optNoInc.n} rolls, no pool`;
+
+  $('rollIncPnl').textContent = '$' + opt.netPnl.toFixed(2) + '/mo';
+  $('rollIncApy').textContent = (opt.effApy * 100).toFixed(1) + '%';
+  $('rollIncNote').textContent = `${opt.n} rolls + pool`;
+
+  const rollAdds = (optNoInc.arbPnl - optNoInc.fees) - controlPnl;
+  const incAdds = opt.netPnl - (optNoInc.arbPnl - optNoInc.fees);
+  const totalEdge = opt.netPnl - controlPnl;
+
+  $('rollAdds').textContent = (rollAdds >= 0 ? '+' : '') + '$' + rollAdds.toFixed(2);
+  $('rollAdds').className = 'result ' + (rollAdds >= 0 ? 'green' : 'red');
+  $('incAdds').textContent = (incAdds >= 0 ? '+' : '') + '$' + incAdds.toFixed(2);
+  $('incAdds').className = 'result ' + (incAdds >= 0 ? 'green' : 'red');
+  $('totalEdge').textContent = (totalEdge >= 0 ? '+' : '') + '$' + totalEdge.toFixed(2);
+  $('totalEdge').className = 'result ' + (totalEdge >= 0 ? 'green' : 'red');
+
+  // Maker Volume Analysis (futures leg only - perp is taker)
+  const yourMakerVol = opt.n * notional;
+  const volPct = (yourMakerVol / exchVol) * 100;
+  const poolIncome = (yourMakerVol / exchVol) * poolPay;
+
+  $('yourMakerVol').textContent = '$' + yourMakerVol.toLocaleString();
+  $('volPct').textContent = volPct.toFixed(3) + '%';
+  $('poolIncome').textContent = '$' + poolIncome.toFixed(2) + '/mo';
+
+  // Decay formula
+  const decayEx = medianApy + (bestApy-medianApy)*Math.exp(-lambda*5);
+  $('decayFormula').innerHTML = `Half-life: ${halfLife}d → Decay rate: ${(lambda*100).toFixed(2)}%/day<br>A spread at ${(bestApy*100).toFixed(1)}% → ${(decayEx*100).toFixed(1)}% in 5 days → ${(medianApy+(bestApy-medianApy)*Math.exp(-lambda*10)*100).toFixed(1)}% in 10 days`;
+
+  // Arrival formula
+  $('arrivalFormula').innerHTML = `Effective arrival rate: ${effArrival.toFixed(2)}/d (adjusted for correlation)<br>Expected wait for a new "good" spread: ${expectedWait.toFixed(1)} days`;
+
+  // Correlation formula
+  $('corrFormula').innerHTML = `${totalPossible} total spreads × (1 - ${correlation.toFixed(2)} correlation) = ${effSpreads.toFixed(0)} independent opportunities`;
+
+  // Tradeoff table
+  const tbody = $('tradeoffBody');
+  tbody.innerHTML = '';
+  results.forEach((r, i) => {
+    if (i > 20 && i !== optIdx) return;
+    const tr = document.createElement('tr');
+    tr.className = i === optIdx ? 'optimum' : '';
+    tr.innerHTML = `
+      <td><strong>${r.n}</strong></td>
+      <td class="num">${(r.avgSpread*100).toFixed(1)}%</td>
+      <td class="num green">+$${r.arbPnl.toFixed(2)}</td>
+      <td class="num accent">+$${r.incentive.toFixed(2)}</td>
+      <td class="num red">-$${r.fees.toFixed(2)}</td>
+      <td class="num ${r.netPnl>=0?'green':'red'}"><strong>$${r.netPnl.toFixed(2)}</strong></td>
+      <td class="num">${(r.effApy*100).toFixed(1)}%</td>
+      <td>${i===optIdx?'<span class="pill green">OPTIMAL</span>':r.netPnl>0?'<span class="pill green">Profit</span>':'<span class="pill red">Loss</span>'}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Model formula
+  $('modelFormula').innerHTML = `
+    <strong>1. Decay half-life:</strong> ${halfLife.toFixed(1)} days (how fast spreads mean-revert)<br>
+    <strong>2. Arrival rate:</strong> ${arrivalRate.toFixed(2)}/d (how often new "good" spreads appear)<br>
+    <strong>3. Correlation:</strong> ${correlation.toFixed(2)} (how much tokens move together)<br>
+    <strong>4. Effective arrival:</strong> ${effArrival.toFixed(2)}/d (adjusted for correlation)<br>
+    <strong>5. Persistence:</strong> ${persistence.toFixed(1)}d (how long a spread stays "good")<br>
+    <strong>6. Max roll rate:</strong> ${maxRollsMo.toFixed(1)}/mo (forced ${forcedRate.toFixed(2)}/d + opportunistic ${oppRate.toFixed(2)}/d)<br>
+    <strong>7. Optimal rolls:</strong> ${opt.n}/mo (where marginal benefit = marginal cost)
+  `;
+
+  // Steps table
+  const stepsBody = $('stepsBody');
+  stepsBody.innerHTML = `
+    <tr><td>Decay half-life</td><td>How fast spreads revert</td><td class="num">${halfLife.toFixed(1)}d</td></tr>
+    <tr><td>Persistence above threshold</td><td>Time a spread stays "good"</td><td class="num">${persistence.toFixed(1)}d</td></tr>
+    <tr><td>Arrival rate</td><td>New "good" spreads per day</td><td class="num">${arrivalRate.toFixed(2)}/d</td></tr>
+    <tr><td>Effective arrival</td><td>Adjusted for correlation</td><td class="num">${effArrival.toFixed(2)}/d</td></tr>
+    <tr><td>Forced roll rate</td><td>1 / persistence</td><td class="num">${forcedRate.toFixed(2)}/d</td></tr>
+    <tr><td>Opportunistic rate</td><td>1 / wait time</td><td class="num">${oppRate.toFixed(2)}/d</td></tr>
+    <tr><td>Max rolls/mo</td><td>Capped at 1/day</td><td class="num">${maxRollsMo.toFixed(1)}</td></tr>
+    <tr><td>Fee per roll</td><td>Round-trip cost</td><td class="num">$${roundTripDollars.toFixed(2)}</td></tr>
+    <tr><td>Incentive per roll</td><td>Pool share × payout</td><td class="num">$${(opt.incentive/Math.max(1,opt.n)).toFixed(2)}</td></tr>
+  `;
+
+  // Sensitivity
+  const sensBody = $('sensBody');
+  const baseOpt = opt.n;
+
+  function findOptimal(bA, mA, wA, gT, mf, tf, cpl, sL, e1, e2, pP, eV, hl, ar, cr) {
+    const nt = numTokens, nS = numSpreads, c = capital, lv = leverage, n = c*lv;
+    const mFL = mf*cpl, tFL = tf*cpl, sLL = sL*n;
+    const c1 = e1==='taker'?(tFL+sLL):mFL;
+    const c2 = e2==='taker'?(tFL+sLL):mFL;
+    const rt = c1+c2+(tFL+sLL)+mFL;
+    const eA = ar*(1-cr);
+    const l = Math.log(2)/hl;
+    let p;
+    if (gT <= mA) p = 30;
+    else if (gT >= bA) p = 0;
+    else { const r = (gT-mA)/(bA-mA); p = r>0?-Math.log(r)/l:0; }
+    const fR = p>0&&p<30?1/p:0;
+    const oR = 1/Math.max(0.01,eA);
+    const mR = Math.min(1, fR+oR);
+    const maxN = mR*30;
+    let bestN = 0, bestPnl = -999;
+    for (let nn = 0; nn <= Math.min(30,Math.ceil(maxN)); nn++) {
+      const mV = nn*n;
+      const pS = mV/eV;
+      const inc = pS*pP;
+      const fe = nn*rt;
+      const hD = nn>0?30/nn:30;
+      const aS = mA + (bA-mA)*(1-Math.exp(-l*hD))/(l*hD);
+      const aP = (aS*30/365)*n;
+      const nP = aP+inc-fe;
+      if (nP > bestPnl) { bestPnl = nP; bestN = nn; }
+    }
+    return { n: bestN, apy: (bestPnl*12)/c };
+  }
+
+  const scenarios = [
+    { label: 'Half-life 2× slower', hl: halfLife*2 },
+    { label: 'Half-life 2× faster', hl: halfLife/2 },
+    { label: 'Arrival 2× higher', ar: arrivalRate*2 },
+    { label: 'Arrival 2× lower', ar: arrivalRate/2 },
+    { label: 'Correlation +0.3', cr: Math.min(0.95,correlation+0.3) },
+    { label: 'Correlation −0.3', cr: Math.max(0,correlation-0.3) },
+    { label: 'Fees 2× higher', mf: makerFeePerContract*2, tf: takerFeePerContract*2 },
+    { label: 'Pool 2× larger', pP: poolPay*2 },
+  ];
+
+  sensBody.innerHTML = scenarios.map(s => {
+    const r = findOptimal(
+      bestApy, medianApy, worstApy, goodThreshold,
+      s.mf ?? makerFeePerContract, s.tf ?? takerFeePerContract, contractsPerLeg, slippagePct, s.e1 ?? exit1, s.e2 ?? exit2,
+      s.pP ?? poolPay, s.eV ?? exchVol, s.hl ?? halfLife, s.ar ?? arrivalRate, s.cr ?? correlation
+    );
+    const delta = r.n - baseOpt;
+    return `<tr><td>${s.label}</td><td class="num">${r.n}</td><td class="num">${(r.apy*100).toFixed(1)}%</td><td>${delta>0?'More rolling':delta<0?'Less rolling':'Same'}</td></tr>`;
+  }).join('');
+}
+
+// Listeners
+['numTokens','numSpreads','bestApy','medianApy','worstApy','goodThreshold',
+ 'makerFee','takerFee','contracts','slippage','exit1','exit2','capital','leverage','poolPay','exchVol'].forEach(id=>{
+  const el = $(id);
+  if (el) { el.addEventListener('input',calc); el.addEventListener('change',calc); }
+});
+
+calc();
+</script>
+</body>
+</html>
