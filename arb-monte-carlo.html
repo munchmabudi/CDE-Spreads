@@ -12,14 +12,12 @@
   .subtitle { color:var(--muted); font-size:11px; margin-bottom:16px; }
   .grid { display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:12px; }
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px; }
   label { display:block; font-size:10px; color:var(--muted); text-transform:uppercase; margin-bottom:2px; }
   input,select { background:var(--bg); border:1px solid var(--border); color:var(--fg); padding:5px 8px; border-radius:4px; width:100%; font-family:inherit; font-size:12px; }
   input:focus,select:focus { outline:none; border-color:var(--accent); }
   .row { margin-bottom:8px; }
   .result { font-size:22px; font-weight:bold; }
-  .result-sm { font-size:16px; font-weight:bold; }
   .result-label { font-size:10px; color:var(--muted); text-transform:uppercase; }
   .green { color:var(--green); }
   .red { color:var(--red); }
@@ -37,12 +35,12 @@
   .btn:hover { opacity:0.9; }
   .btn:disabled { opacity:0.5; cursor:wait; }
   .progress { width:100%; height:20px; background:var(--bg); border-radius:4px; overflow:hidden; margin:8px 0; }
-  .progress-bar { height:100%; background:var(--accent); transition:width 0.3s; }
-  .dist-bar { height:16px; border-radius:2px; margin:1px 0; display:flex; align-items:center; padding-left:4px; font-size:9px; color:var(--bg); font-weight:bold; }
+  .progress-bar { height:100%; background:var(--accent); transition:width 0.1s; }
   .highlight { background:rgba(88,166,255,0.1); border:1px solid var(--accent); }
-  .win { background:var(--green); }
-  .loss { background:var(--red); }
-  @media(max-width:900px) { .grid,.grid2,.grid3 { grid-template-columns:1fr; } }
+  .pill { display:inline-block; padding:1px 6px; border-radius:8px; font-size:9px; font-weight:bold; }
+  .pill.green { background:rgba(63,185,80,0.15); color:var(--green); }
+  .pill.red { background:rgba(248,81,73,0.15); color:var(--red); }
+  @media(max-width:900px) { .grid,.grid2 { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -135,7 +133,7 @@
     <table>
       <thead>
         <tr>
-          <th>Scenario</th><th class="num">Avg APY</th><th class="num">Rolls</th><th class="num">Avg Hold</th>
+          <th>#</th><th class="num">APY</th><th class="num">Rolls</th><th class="num">Hold</th>
           <th class="num">Arb PnL</th><th class="num">Incentive</th><th class="num">Fees</th><th class="num">Net PnL</th>
           <th class="num">APY %</th><th>Win?</th>
         </tr>
@@ -156,24 +154,85 @@ function createRNG(seed) {
       s = (s * 1664525 + 1013904223) & 0xffffffff;
       return (s >>> 0) / 0xffffffff;
     },
-    // Box-Muller transform for normal distribution
     normal(mean, std) {
       const u1 = this.next(), u2 = this.next();
       const z = Math.sqrt(-2 * Math.log(u1 || 0.0001)) * Math.cos(2 * Math.PI * u2);
       return mean + z * std;
     },
-    // Uniform between min and max
-    uniform(min, max) {
-      return min + this.next() * (max - min);
-    },
-    // Exponential with given rate
     exponential(rate) {
       return -Math.log(this.next() || 0.0001) / rate;
     }
   };
 }
 
-async function runSimulation() {
+// Web Worker code as a string (runs in background thread)
+const workerCode = `
+  function createRNG(seed) {
+    let s = seed;
+    return {
+      next() {
+        s = (s * 1664525 + 1013904223) & 0xffffffff;
+        return (s >>> 0) / 0xffffffff;
+      },
+      normal(mean, std) {
+        const u1 = this.next(), u2 = this.next();
+        const z = Math.sqrt(-2 * Math.log(u1 || 0.0001)) * Math.cos(2 * Math.PI * u2);
+        return mean + z * std;
+      },
+      exponential(rate) {
+        return -Math.log(this.next() || 0.0001) / rate;
+      }
+    };
+  }
+
+  self.onmessage = function(e) {
+    const p = e.data;
+    const rng = createRNG(p.seed);
+    const lambda = Math.log(2) / p.halfLife;
+    const scenarios = [];
+    const batchSize = 200;
+    
+    for (let i = 0; i < p.numSims; i++) {
+      let apy = rng.normal(p.apyMean, p.apyStd);
+      apy = Math.max(p.apyMin, Math.min(p.apyMax, apy));
+      
+      const holdDays = Math.max(p.minHold, Math.min(p.maxHold, rng.exponential(1 / p.halfLife)));
+      
+      const decayFactor = (1 - Math.exp(-lambda * holdDays)) / (lambda * holdDays);
+      const medianApy = apy * 0.4;
+      const avgApy = medianApy + (apy - medianApy) * decayFactor;
+      
+      const numRolls = Math.floor(p.numDays / holdDays);
+      const arbPnl = (avgApy * holdDays / 365) * p.notional * numRolls;
+      const fees = numRolls * p.roundTripDollars;
+      const makerVol = numRolls * p.notional;
+      const poolShare = makerVol / p.exchVol;
+      const incentive = poolShare * p.poolPay * (p.numDays / 30);
+      const netPnl = arbPnl + incentive - fees;
+      const apyPct = (netPnl * 365 / p.numDays) / p.capital * 100;
+      
+      scenarios.push({
+        apy: apy * 100,
+        holdDays,
+        numRolls,
+        arbPnl,
+        incentive,
+        fees,
+        netPnl,
+        apyPct,
+        win: netPnl > 0
+      });
+      
+      if (i % batchSize === 0) {
+        self.postMessage({ type: 'progress', progress: i / p.numSims });
+      }
+    }
+    
+    self.postMessage({ type: 'complete', scenarios });
+  };
+`;
+
+function runSimulation() {
   const btn = $('runBtn');
   const progressDiv = $('progressDiv');
   const progressBar = $('progressBar');
@@ -183,101 +242,60 @@ async function runSimulation() {
   progressDiv.style.display = 'block';
   progressBar.style.width = '0%';
   
-  // Allow UI to update
-  await new Promise(r => setTimeout(r, 50));
+  const params = {
+    capital: parseFloat($('capital').value) || 100000,
+    leverage: parseFloat($('leverage').value) || 5,
+    apyMin: (parseFloat($('apyMin').value) || 5) / 100,
+    apyMax: (parseFloat($('apyMax').value) || 50) / 100,
+    apyMean: (parseFloat($('apyMean').value) || 18) / 100,
+    apyStd: (parseFloat($('apyStd').value) || 8) / 100,
+    halfLife: parseFloat($('halfLife').value) || 2.5,
+    minHold: parseFloat($('minHold').value) || 0.5,
+    maxHold: parseFloat($('maxHold').value) || 10,
+    makerFeePerContract: parseFloat($('makerFee').value),
+    takerFeePerContract: parseFloat($('takerFee').value),
+    contractsPerLeg: parseInt($('contracts').value) || 200,
+    slippagePct: (parseFloat($('slippage').value) || 0.01) / 100,
+    poolPay: parseFloat($('poolPay').value) || 100000,
+    exchVol: parseFloat($('exchVol').value) || 100000000,
+    numSims: parseInt($('numSims').value) || 5000,
+    numDays: parseInt($('numDays').value) || 30,
+    seed: parseInt($('seed').value) || 42
+  };
   
-  // Read params
-  const capital = parseFloat($('capital').value) || 100000;
-  const leverage = parseFloat($('leverage').value) || 5;
-  const notional = capital * leverage;
-  $('notionalDisp').value = '$' + notional.toLocaleString();
+  params.notional = params.capital * params.leverage;
+  params.makerFeePerLeg = params.makerFeePerContract * params.contractsPerLeg;
+  params.takerFeePerLeg = params.takerFeePerContract * params.contractsPerLeg;
+  params.slippagePerLeg = params.slippagePct * params.notional;
+  params.roundTripDollars = 2 * params.makerFeePerLeg + 2 * params.takerFeePerLeg + 2 * params.slippagePerLeg;
   
-  const apyMin = (parseFloat($('apyMin').value) || 5) / 100;
-  const apyMax = (parseFloat($('apyMax').value) || 50) / 100;
-  const apyMean = (parseFloat($('apyMean').value) || 18) / 100;
-  const apyStd = (parseFloat($('apyStd').value) || 8) / 100;
+  // Create worker from blob
+  const blob = new Blob([workerCode], { type: 'application/javascript' });
+  const worker = new Worker(URL.createObjectURL(blob));
   
-  const halfLife = parseFloat($('halfLife').value) || 2.5;
-  const minHold = parseFloat($('minHold').value) || 0.5;
-  const maxHold = parseFloat($('maxHold').value) || 10;
-  
-  const makerFeePerContract = parseFloat($('makerFee').value);
-  const takerFeePerContract = parseFloat($('takerFee').value);
-  const contractsPerLeg = parseInt($('contracts').value) || 200;
-  const slippagePct = (parseFloat($('slippage').value) || 0.01) / 100;
-  
-  const poolPay = parseFloat($('poolPay').value) || 100000;
-  const exchVol = parseFloat($('exchVol').value) || 100000000;
-  
-  const numSims = parseInt($('numSims').value) || 5000;
-  const numDays = parseInt($('numDays').value) || 30;
-  const seed = parseInt($('seed').value) || 42;
-  
-  const makerFeePerLeg = makerFeePerContract * contractsPerLeg;
-  const takerFeePerLeg = takerFeePerContract * contractsPerLeg;
-  const slippagePerLeg = slippagePct * notional;
-  const roundTripDollars = 2 * makerFeePerLeg + 2 * takerFeePerLeg + 2 * slippagePerLeg;
-  
-  const lambda = Math.log(2) / halfLife;
-  
-  // Run simulations with async yields to prevent UI lock
-  const scenarios = [];
-  const rng = createRNG(seed);
-  const batchSize = 100;
-  
-  for (let i = 0; i < numSims; i++) {
-    // Random APY from truncated normal (clamped to min/max)
-    let apy = rng.normal(apyMean, apyStd);
-    apy = Math.max(apyMin, Math.min(apyMax, apy));
+  worker.onmessage = function(e) {
+    const data = e.data;
     
-    // Random hold period (exponential decay with min/max)
-    const holdDays = Math.max(minHold, Math.min(maxHold, rng.exponential(1 / halfLife)));
-    
-    // Calculate decay-adjusted APY over hold period
-    const decayFactor = (1 - Math.exp(-lambda * holdDays)) / (lambda * holdDays);
-    const medianApy = apy * 0.4;
-    const avgApy = medianApy + (apy - medianApy) * decayFactor;
-    
-    // Number of rolls in the period
-    const numRolls = Math.floor(numDays / holdDays);
-    
-    // Arb PnL
-    const arbPnl = (avgApy * holdDays / 365) * notional * numRolls;
-    
-    // Fees
-    const fees = numRolls * roundTripDollars;
-    
-    // Maker volume (futures leg only)
-    const makerVol = numRolls * notional;
-    const poolShare = makerVol / exchVol;
-    const incentive = poolShare * poolPay * (numDays / 30);
-    
-    // Net PnL
-    const netPnl = arbPnl + incentive - fees;
-    const apyPct = (netPnl * 365 / numDays) / capital * 100;
-    
-    scenarios.push({
-      apy: apy * 100,
-      holdDays,
-      numRolls,
-      arbPnl,
-      incentive,
-      fees,
-      netPnl,
-      apyPct,
-      win: netPnl > 0
-    });
-    
-    // Update progress and yield to browser every batch
-    if (i % batchSize === 0) {
-      progressBar.style.width = (i / numSims * 100) + '%';
-      await new Promise(r => setTimeout(r, 0));
+    if (data.type === 'progress') {
+      progressBar.style.width = (data.progress * 100) + '%';
+    } else if (data.type === 'complete') {
+      progressBar.style.width = '100%';
+      displayResults(data.scenarios, params);
+      btn.disabled = false;
+      btn.textContent = 'Run Monte Carlo Simulation';
+      setTimeout(() => { progressDiv.style.display = 'none'; }, 500);
+      worker.terminate();
     }
-  }
+  };
   
-  progressBar.style.width = '100%';
+  worker.postMessage(params);
+}
+
+function displayResults(scenarios, params) {
+  const notional = params.notional;
+  const capital = params.capital;
+  const numSims = scenarios.length;
   
-  // Calculate statistics
   const totalNet = scenarios.reduce((s, x) => s + x.netPnl, 0);
   const avgNet = totalNet / numSims;
   const wins = scenarios.filter(x => x.win).length;
@@ -302,10 +320,8 @@ async function runSimulation() {
   const avgInc = scenarios.reduce((s, x) => s + x.incentive, 0) / numSims;
   const avgFees = scenarios.reduce((s, x) => s + x.fees, 0) / numSims;
   
-  // Control (hold 15% APY)
   const controlPnl = (0.15 / 12) * notional;
   
-  // Display summary
   $('resultsSummary').innerHTML = `
     <div class="grid">
       <div class="card ${avgNet > controlPnl ? 'highlight' : ''}">
@@ -331,7 +347,6 @@ async function runSimulation() {
     </div>
   `;
   
-  // Distribution chart
   const numBins = 30;
   const binSize = (maxNet - minNet) / numBins;
   const bins = new Array(numBins).fill(0);
@@ -357,7 +372,6 @@ async function runSimulation() {
   distHtml += '<div style="text-align:center;font-size:11px;color:var(--muted);margin-top:4px;">Monthly PnL Distribution (Green = Profit, Red = Loss)</div>';
   $('distChart').innerHTML = distHtml;
   
-  // Detailed stats
   $('detailedStats').innerHTML = `
     <div class="grid">
       <div class="card">
@@ -410,7 +424,6 @@ async function runSimulation() {
     </div>
   `;
   
-  // Scenario table (sample of 20)
   const sampleSize = 20;
   const step = Math.floor(numSims / sampleSize);
   const samples = [];
@@ -420,10 +433,10 @@ async function runSimulation() {
   
   const tbody = $('scenarioBody');
   tbody.innerHTML = '';
-  samples.forEach(s => {
+  samples.forEach((s, idx) => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td>#${samples.indexOf(s) + 1}</td>
+      <td>#${idx + 1}</td>
       <td class="num">${s.apy.toFixed(1)}%</td>
       <td class="num">${s.numRolls}</td>
       <td class="num">${s.holdDays.toFixed(1)}</td>
@@ -436,15 +449,7 @@ async function runSimulation() {
     `;
     tbody.appendChild(tr);
   });
-  
-  btn.disabled = false;
-  btn.textContent = 'Run Monte Carlo Simulation';
-  setTimeout(() => { progressDiv.style.display = 'none'; }, 500);
 }
-
-// Initialize
-$('notionalDisp').value = '$' + (100000 * 5).toLocaleString();
-updateParamSummary();
 
 function updateParamSummary() {
   const capital = parseFloat($('capital').value) || 0;
@@ -454,6 +459,7 @@ function updateParamSummary() {
   const numSpreads = parseInt($('numSpreads').value) || 0;
   $('totalSpreads').value = numTokens * numSpreads;
   $('notionalDisp').value = '$' + notional.toLocaleString();
+  
   const apyMin = parseFloat($('apyMin').value) || 0;
   const apyMax = parseFloat($('apyMax').value) || 0;
   const apyMean = parseFloat($('apyMean').value) || 0;
@@ -479,17 +485,19 @@ function updateParamSummary() {
     <strong>APY Distribution:</strong> ${apyMin}% min / ${apyMax}% max / ${apyMean}% mean / ${apyStd}% std dev<br>
     <strong>Decay & Hold:</strong> ${halfLife}d half-life / ${minHold}d min hold / ${maxHold}d max hold<br>
     <strong>Fees:</strong> $${makerFee}/contract maker / $${takerFee}/contract taker / ${contracts} contracts/leg<br>
-    <strong>Slippage & Exit:</strong>${slippage}% slippage / Close leg 1 as ${exit1} / Close leg 2 as ${exit2}<br>
+    <strong>Slippage & Exit:</strong> ${slippage}% slippage / Close leg 1 as ${exit1} / Close leg 2 as ${exit2}<br>
     <strong>Pool:</strong> $${poolPay.toLocaleString()}/mo pool / $${exchVol.toLocaleString()}/mo exchange maker vol<br>
     <strong>Simulation:</strong> ${numSims} scenarios / ${numDays} days / seed ${seed}
   `;
 }
 
-// Update summary on any input change
 document.querySelectorAll('input, select').forEach(el => {
   el.addEventListener('input', updateParamSummary);
   el.addEventListener('change', updateParamSummary);
-}
+});
+
+$('notionalDisp').value = '$' + (100000 * 5).toLocaleString();
+updateParamSummary();
 </script>
 </body>
 </html>
