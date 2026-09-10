@@ -106,6 +106,13 @@
 
 <h2 style="margin-top:16px;">All Parameters Summary</h2>
 <div class="card">
+  <div class="row" style="margin-bottom:12px;">
+    <label>Simulation Mode</label>
+    <select id="simMode" onchange="updateParamSummary()">
+      <option value="baseline">Baseline (only APY & hold random)</option>
+      <option value="full">Full Random (everything varies)</option>
+    </select>
+  </div>
   <div id="paramSummary" style="font-size:12px;line-height:1.8;"></div>
 </div>
 
@@ -181,6 +188,9 @@ const workerCode = `
       },
       exponential(rate) {
         return -Math.log(this.next() || 0.0001) / rate;
+      },
+      uniform(min, max) {
+        return min + this.next() * (max - min);
       }
     };
   }
@@ -193,10 +203,28 @@ const workerCode = `
     const batchSize = 200;
     
     for (let i = 0; i < p.numSims; i++) {
+      // APY always randomizes
       let apy = rng.normal(p.apyMean, p.apyStd);
       apy = Math.max(p.apyMin, Math.min(p.apyMax, apy));
       
+      // Hold period always randomizes
       const holdDays = Math.max(p.minHold, Math.min(p.maxHold, rng.exponential(1 / p.halfLife)));
+      
+      // In full random mode, environment varies
+      let exchVol = p.exchVol;
+      let arrivalRate = p.arrivalRate;
+      let envStress = 0;
+      
+      if (p.simMode === 'full') {
+        // Environment stress: -1 (calm) to +3 (extreme)
+        envStress = rng.uniform(-1, 3);
+        // Volume scales with stress: base × (1 + 0.5 × stress)
+        // Clamped to historical bounds
+        const volMult = Math.max(0.3, Math.min(3.0, 1 + 0.5 * envStress));
+        exchVol = p.baseExchVol * volMult;
+        // Arrival rate also scales with stress
+        arrivalRate = p.baseArrivalRate * volMult;
+      }
       
       const decayFactor = (1 - Math.exp(-lambda * holdDays)) / (lambda * holdDays);
       const medianApy = apy * 0.4;
@@ -206,7 +234,7 @@ const workerCode = `
       const arbPnl = (avgApy * holdDays / 365) * p.notional * numRolls;
       const fees = numRolls * p.roundTripDollars;
       const makerVol = numRolls * p.notional;
-      const poolShare = makerVol / p.exchVol;
+      const poolShare = makerVol / exchVol;
       const incentive = poolShare * p.poolPay * (p.numDays / 30);
       const netPnl = arbPnl + incentive - fees;
       const apyPct = (netPnl * 365 / p.numDays) / p.capital * 100;
@@ -220,7 +248,9 @@ const workerCode = `
         fees,
         netPnl,
         apyPct,
-        win: netPnl > 0
+        win: netPnl > 0,
+        envStress,
+        actualVol: exchVol
       });
       
       if (i % batchSize === 0) {
@@ -260,7 +290,11 @@ function runSimulation() {
     exchVol: parseFloat($('exchVol').value) || 100000000,
     numSims: parseInt($('numSims').value) || 5000,
     numDays: parseInt($('numDays').value) || 30,
-    seed: parseInt($('seed').value) || 42
+    seed: parseInt($('seed').value) || 42,
+    simMode: $('simMode').value,
+    baseExchVol: parseFloat($('exchVol').value) || 100000000,
+    arrivalRate: 0.5,
+    baseArrivalRate: 0.5
   };
   
   params.notional = params.capital * params.leverage;
@@ -319,6 +353,8 @@ function displayResults(scenarios, params) {
   const avgArb = scenarios.reduce((s, x) => s + x.arbPnl, 0) / numSims;
   const avgInc = scenarios.reduce((s, x) => s + x.incentive, 0) / numSims;
   const avgFees = scenarios.reduce((s, x) => s + x.fees, 0) / numSims;
+  const avgEnvStress = scenarios.reduce((s, x) => s + (x.envStress || 0), 0) / numSims;
+  const avgActualVol = scenarios.reduce((s, x) => s + (x.actualVol || params.exchVol), 0) / numSims;
   
   const controlPnl = (0.15 / 12) * notional;
   
@@ -405,6 +441,8 @@ function displayResults(scenarios, params) {
           <tr><td>Avg Arb PnL</td><td class="num green">$${avgArb.toFixed(2)}</td></tr>
           <tr><td>Avg Incentive</td><td class="num accent">$${avgInc.toFixed(2)}</td></tr>
           <tr><td>Avg Fees</td><td class="num red">$${avgFees.toFixed(2)}</td></tr>
+          <tr><td>Avg Env Stress</td><td class="num">${avgEnvStress.toFixed(2)}</td></tr>
+          <tr><td>Avg Actual Vol</td><td class="num">$${(avgActualVol/1e6).toFixed(1)}M</td></tr>
         </table>
       </div>
       <div class="card">
