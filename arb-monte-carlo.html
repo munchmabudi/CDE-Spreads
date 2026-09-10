@@ -173,7 +173,7 @@ function createRNG(seed) {
   };
 }
 
-function runSimulation() {
+async function runSimulation() {
   const btn = $('runBtn');
   const progressDiv = $('progressDiv');
   const progressBar = $('progressBar');
@@ -182,6 +182,9 @@ function runSimulation() {
   btn.textContent = 'Running...';
   progressDiv.style.display = 'block';
   progressBar.style.width = '0%';
+  
+  // Allow UI to update
+  await new Promise(r => setTimeout(r, 50));
   
   // Read params
   const capital = parseFloat($('capital').value) || 100000;
@@ -217,16 +220,12 @@ function runSimulation() {
   
   const lambda = Math.log(2) / halfLife;
   
-  // Run simulations
+  // Run simulations with async yields to prevent UI lock
   const scenarios = [];
   const rng = createRNG(seed);
+  const batchSize = 100;
   
   for (let i = 0; i < numSims; i++) {
-    // Update progress every 100 sims
-    if (i % 100 === 0) {
-      progressBar.style.width = (i / numSims * 100) + '%';
-    }
-    
     // Random APY from truncated normal (clamped to min/max)
     let apy = rng.normal(apyMean, apyStd);
     apy = Math.max(apyMin, Math.min(apyMax, apy));
@@ -236,7 +235,7 @@ function runSimulation() {
     
     // Calculate decay-adjusted APY over hold period
     const decayFactor = (1 - Math.exp(-lambda * holdDays)) / (lambda * holdDays);
-    const medianApy = apy * 0.4; // assume median is 40% of current
+    const medianApy = apy * 0.4;
     const avgApy = medianApy + (apy - medianApy) * decayFactor;
     
     // Number of rolls in the period
@@ -268,6 +267,12 @@ function runSimulation() {
       apyPct,
       win: netPnl > 0
     });
+    
+    // Update progress and yield to browser every batch
+    if (i % batchSize === 0) {
+      progressBar.style.width = (i / numSims * 100) + '%';
+      await new Promise(r => setTimeout(r, 0));
+    }
   }
   
   progressBar.style.width = '100%';
